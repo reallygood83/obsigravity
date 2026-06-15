@@ -170,6 +170,8 @@ function runProcess(command: string, args: string[], env: NodeJS.ProcessEnv, cwd
       reject(error);
     });
     child.on('close', (code) => {
+      stdout += stdoutDecoder.decode();
+      stderr += stderrDecoder.decode();
       globalThis.clearTimeout(timeout);
       if (code && code !== 0) {
         reject(new Error(`${path.basename(command)} exited with code ${code}\n${stderr || stdout}`.trim()));

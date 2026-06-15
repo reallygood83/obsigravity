@@ -141,6 +141,8 @@ export class AntigravityProvider implements AgentProvider {
       done = true;
     });
     child.on('close', (code) => {
+      stdoutFull += stdoutDecoder.decode();
+      stderrFull += stderrDecoder.decode();
       exitCode = code;
       window.clearTimeout(timeout);
       if (code && code !== 0) {
