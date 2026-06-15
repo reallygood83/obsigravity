@@ -151,16 +151,19 @@ function runProcess(command: string, args: string[], env: NodeJS.ProcessEnv, cwd
       windowsHide: false,
     });
 
+    const stdoutDecoder = new TextDecoder('utf-8');
+    const stderrDecoder = new TextDecoder('utf-8');
+
     const timeout = globalThis.setTimeout(() => {
       child.kill('SIGTERM');
       reject(new Error(`${path.basename(command)} timed out after ${Math.round(timeoutMs / 1000)} seconds`));
     }, timeoutMs);
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+      stdout += stdoutDecoder.decode(chunk, { stream: true });
     });
     child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      stderr += stderrDecoder.decode(chunk, { stream: true });
     });
     child.on('error', (error) => {
       globalThis.clearTimeout(timeout);

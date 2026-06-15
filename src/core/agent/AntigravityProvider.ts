@@ -117,8 +117,11 @@ export class AntigravityProvider implements AgentProvider {
       child.kill();
     }, 5 * 60 * 1000);
 
+    const stdoutDecoder = new TextDecoder('utf-8');
+    const stderrDecoder = new TextDecoder('utf-8');
+
     child.stdout!.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
+      const text = stdoutDecoder.decode(chunk, { stream: true });
       stdoutFull += text;
       stdoutBuffer += text;
       const lines = stdoutBuffer.split(/\r?\n/);
@@ -129,7 +132,7 @@ export class AntigravityProvider implements AgentProvider {
       }
     });
     child.stderr!.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
+      const text = stderrDecoder.decode(chunk, { stream: true });
       stderrFull += text;
       stderrBuffer += text;
     });
