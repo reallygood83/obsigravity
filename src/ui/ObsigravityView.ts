@@ -681,8 +681,21 @@ export class ObsigravityView extends ItemView {
     return false;
   }
 
-  /** Public for Vault Pulse and other same-author integrations */
-  async runBuiltinSkill(skill: BuiltinSkill, request: string, originalPrompt: string): Promise<void> {
+  /**
+   * Public for Vault Pulse and other same-author integrations.
+   * @param forcedNotePath When set, use this note as context instead of whatever leaf is active
+   *   (avoids race where Obsigravity sidebar steals focus / wrong last-active file).
+   */
+  async runBuiltinSkill(
+    skill: BuiltinSkill,
+    request: string,
+    originalPrompt: string,
+    forcedNotePath?: string,
+  ): Promise<void> {
+    if (this.isRunning) {
+      new Notice('Obsigravity is already running a request. Wait for it to finish.');
+      return;
+    }
     this.isRunning = true;
     this.appendMessage({ role: 'user', content: originalPrompt, timestamp: Date.now() });
 
@@ -693,10 +706,17 @@ export class ObsigravityView extends ItemView {
     this.appendProgressStep(progressListEl, `${skill.name} started`);
 
     try {
-      const context = await this.plugin.getActiveNoteContext();
+      const context = forcedNotePath
+        ? await this.plugin.getNoteContextByPath(forcedNotePath)
+        : await this.plugin.getActiveNoteContext();
       if (!context?.path && !context?.pinnedNotes?.length) {
         throw new Error(`${skill.name} needs an active or pinned Obsidian note.`);
       }
+
+      this.appendProgressStep(
+        progressListEl,
+        `Using note context: ${context.path || '(pinned only)'}`,
+      );
 
       let assistantBuffer = '';
       for await (const event of this.plugin.agent.query({

@@ -91,7 +91,8 @@ export default class ObsigravityPlugin extends Plugin {
 
   /**
    * Public API for Vault Pulse (and similar plugins).
-   * Opens the note, opens Obsigravity, runs Note Surgeon with the user request.
+   * Opens the note, opens Obsigravity, runs Note Surgeon with an **explicit note path**
+   * so context does not depend on which leaf is focused.
    */
   async startNoteUpdateFromPulse(notePath: string, userPrompt: string): Promise<void> {
     const path = notePath.replace(/\\/g, '/');
@@ -101,29 +102,43 @@ export default class ObsigravityPlugin extends Plugin {
       return;
     }
 
-    await this.app.workspace.getLeaf(false).openFile(file);
+    // Open in a markdown leaf and force last-active pointer
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file, { active: true });
     this.lastActiveMarkdownFile = file;
+
+    // Pin so context chips / getActiveNoteContext also see this note
+    try {
+      await this.pinNote(path);
+    } catch {
+      /* pin is best-effort */
+    }
+
     await this.activateView();
+    this.refreshOpenViews();
 
     if (!getBuiltinSkillById('note-surgeon')) {
       new Notice('Obsigravity: note-surgeon skill missing');
       return;
     }
 
+    const content = await this.app.vault.read(file);
     const direction = [
-      'Vault Pulse info-update request. Read the active note carefully, then update it so facts, structure, and clarity match the user request.',
-      'Prefer editing the active note when safe file editing is available. Preserve original meaning unless the user asks otherwise.',
+      'Vault Pulse info-update request.',
+      `TARGET NOTE PATH (must edit ONLY this file): ${path}`,
+      `TARGET NOTE TITLE: ${file.basename}`,
+      'Read and update THIS note only. Ignore other open tabs or pinned notes unless the user asks.',
+      'Prefer editing the target note when safe file editing is available. Preserve original meaning unless the user asks otherwise.',
+      '',
+      '--- BEGIN CURRENT NOTE CONTENT ---',
+      content.slice(0, 120_000),
+      '--- END CURRENT NOTE CONTENT ---',
       '',
       'User request:',
-      userPrompt.trim() || 'Refresh and improve this note with clearer structure and up-to-date framing based on its content.',
+      userPrompt.trim() || 'Refresh and improve this note with clearer structure based on its content.',
     ].join('\n');
 
-    // Let the view mount, then run skill
-    window.setTimeout(() => {
-      void this.runNoteSurgeonOnOpenViews(direction);
-    }, 350);
-
-    new Notice('Obsigravity: Note Surgeon started for Vault Pulse update');
+    await this.runNoteSurgeonOnOpenViews(direction, path, 0);
   }
 
   private pendingPulseUpdate: { path: string; prompt: string } | null = null;
@@ -143,25 +158,72 @@ export default class ObsigravityPlugin extends Plugin {
     await this.startNoteUpdateFromPulse(pending.path, pending.prompt);
   }
 
-  private async runNoteSurgeonOnOpenViews(direction: string, attempt = 0): Promise<void> {
+  /** Resolve note context by explicit path (Vault Pulse safe). */
+  async getNoteContextByPath(notePath: string): Promise<{
+    file: TFile;
+    path: string;
+    content: string;
+    selection?: string;
+    pinnedNotes: Array<{ path: string; content: string }>;
+  } | null> {
+    const path = notePath.replace(/\\/g, '/');
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!file || !(file instanceof TFile) || file.extension !== 'md') return null;
+    this.lastActiveMarkdownFile = file;
+    const content = await this.app.vault.read(file);
+    // Prefer target note only for Pulse updates — do not mix other pins as primary
+    return {
+      file,
+      path,
+      content,
+      selection: undefined,
+      pinnedNotes: [],
+    };
+  }
+
+  private async runNoteSurgeonOnOpenViews(
+    direction: string,
+    forcedNotePath: string,
+    attempt = 0,
+  ): Promise<void> {
     const skill = getBuiltinSkillById('note-surgeon');
     if (!skill) return;
+
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_OBSIGRAVITY);
     for (const leaf of leaves) {
       const view = leaf.view;
       if (view instanceof ObsigravityView) {
-        await view.runBuiltinSkill(skill, direction, `/note-surgeon ${direction}`);
+        try {
+          const shortUser = direction.includes('User request:')
+            ? direction.split('User request:')[1]?.trim().slice(0, 300) || 'update note'
+            : 'update note';
+          await view.runBuiltinSkill(
+            skill,
+            direction,
+            `/note-surgeon [${forcedNotePath}] ${shortUser}`,
+            forcedNotePath,
+          );
+          new Notice(`Obsigravity: Note Surgeon → ${forcedNotePath.split('/').pop()}`);
+        } catch (e) {
+          console.error(e);
+          new Notice(
+            `Obsigravity Note Surgeon failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
         return;
       }
     }
-    if (attempt >= 3) {
-      new Notice('Obsigravity: could not start Note Surgeon view. Open Obsigravity and run /note-surgeon manually.');
+
+    if (attempt >= 8) {
+      new Notice(
+        'Obsigravity: could not start Note Surgeon. Open Obsigravity and run /note-surgeon manually on the target note.',
+      );
       return;
     }
+
     await this.activateView();
-    window.setTimeout(() => {
-      void this.runNoteSurgeonOnOpenViews(direction, attempt + 1);
-    }, 400);
+    await new Promise((r) => window.setTimeout(r, 250 + attempt * 100));
+    await this.runNoteSurgeonOnOpenViews(direction, forcedNotePath, attempt + 1);
   }
 
   onunload(): void {
