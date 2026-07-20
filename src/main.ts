@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Plugin, type TFile } from 'obsidian';
+import { MarkdownView, Notice, Plugin, TFile } from 'obsidian';
 
 import { AntigravityProvider } from './core/agent/AntigravityProvider';
 import { findAntigravityCli } from './core/antigravity/AntigravityCliResolver';
@@ -7,6 +7,7 @@ import { detectExternalClis } from './core/cli/ExternalCliResolver';
 import { draftVisualPrompt, generateVisualAsset } from './core/images/VisualAssetService';
 import { buildImagePrompt } from './core/images/ImagePromptBuilder';
 import { buildProcessEnv } from './core/settings/env';
+import { getBuiltinSkillById } from './core/skills/BuiltinSkills';
 import { generateGrokVideoFromNote } from './core/video/GrokVideoService';
 import type { ObsigravitySettings } from './core/types';
 import { DEFAULT_SETTINGS } from './core/types';
@@ -79,7 +80,88 @@ export default class ObsigravityPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: 'update-note-from-pulse',
+      name: 'Update note from Vault Pulse request',
+      callback: () => void this.consumePendingPulseUpdate(),
+    });
+
     this.addSettingTab(new ObsigravitySettingsTab(this));
+  }
+
+  /**
+   * Public API for Vault Pulse (and similar plugins).
+   * Opens the note, opens Obsigravity, runs Note Surgeon with the user request.
+   */
+  async startNoteUpdateFromPulse(notePath: string, userPrompt: string): Promise<void> {
+    const path = notePath.replace(/\\/g, '/');
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!file || !(file instanceof TFile) || file.extension !== 'md') {
+      new Notice(`Obsigravity: note not found (${path})`);
+      return;
+    }
+
+    await this.app.workspace.getLeaf(false).openFile(file);
+    this.lastActiveMarkdownFile = file;
+    await this.activateView();
+
+    if (!getBuiltinSkillById('note-surgeon')) {
+      new Notice('Obsigravity: note-surgeon skill missing');
+      return;
+    }
+
+    const direction = [
+      'Vault Pulse info-update request. Read the active note carefully, then update it so facts, structure, and clarity match the user request.',
+      'Prefer editing the active note when safe file editing is available. Preserve original meaning unless the user asks otherwise.',
+      '',
+      'User request:',
+      userPrompt.trim() || 'Refresh and improve this note with clearer structure and up-to-date framing based on its content.',
+    ].join('\n');
+
+    // Let the view mount, then run skill
+    window.setTimeout(() => {
+      void this.runNoteSurgeonOnOpenViews(direction);
+    }, 350);
+
+    new Notice('Obsigravity: Note Surgeon started for Vault Pulse update');
+  }
+
+  private pendingPulseUpdate: { path: string; prompt: string } | null = null;
+
+  /** Soft bridge: queue a request then run command */
+  queuePulseUpdate(path: string, prompt: string): void {
+    this.pendingPulseUpdate = { path, prompt };
+  }
+
+  async consumePendingPulseUpdate(): Promise<void> {
+    const pending = this.pendingPulseUpdate;
+    this.pendingPulseUpdate = null;
+    if (!pending) {
+      new Notice('No pending Vault Pulse update request.');
+      return;
+    }
+    await this.startNoteUpdateFromPulse(pending.path, pending.prompt);
+  }
+
+  private async runNoteSurgeonOnOpenViews(direction: string, attempt = 0): Promise<void> {
+    const skill = getBuiltinSkillById('note-surgeon');
+    if (!skill) return;
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_OBSIGRAVITY);
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      if (view instanceof ObsigravityView) {
+        await view.runBuiltinSkill(skill, direction, `/note-surgeon ${direction}`);
+        return;
+      }
+    }
+    if (attempt >= 3) {
+      new Notice('Obsigravity: could not start Note Surgeon view. Open Obsigravity and run /note-surgeon manually.');
+      return;
+    }
+    await this.activateView();
+    window.setTimeout(() => {
+      void this.runNoteSurgeonOnOpenViews(direction, attempt + 1);
+    }, 400);
   }
 
   onunload(): void {

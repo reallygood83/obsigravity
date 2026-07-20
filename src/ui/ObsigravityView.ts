@@ -681,7 +681,8 @@ export class ObsigravityView extends ItemView {
     return false;
   }
 
-  private async runBuiltinSkill(skill: BuiltinSkill, request: string, originalPrompt: string): Promise<void> {
+  /** Public for Vault Pulse and other same-author integrations */
+  async runBuiltinSkill(skill: BuiltinSkill, request: string, originalPrompt: string): Promise<void> {
     this.isRunning = true;
     this.appendMessage({ role: 'user', content: originalPrompt, timestamp: Date.now() });
 

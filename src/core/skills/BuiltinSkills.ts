@@ -255,3 +255,7 @@ export function getBuiltinSkillBySlash(prompt: string): { skill: BuiltinSkill; r
     request: (match[2] || '').trim(),
   };
 }
+
+export function getBuiltinSkillById(id: BuiltinSkillId): BuiltinSkill | null {
+  return BUILTIN_SKILLS.find((item) => item.id === id) ?? null;
+}
